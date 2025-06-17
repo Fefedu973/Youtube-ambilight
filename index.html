@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>YouTube‑style Ambient Mode Demo</title>
+    <style>
+        :root {
+            /* ↓ key dials that match YouTube defaults --------------------------------*/
+            --blur-radius: 100;
+            /* Gaussian radius applied by ctx.filter      */
+            --scale-down: 0.01;
+            /* thumbnail size ≈ video * 0.075 (≈ 128 × 72)*/
+            --overscan-mult: 10;
+            /* how far the glow bleeds beyond edges       */
+            --element-opacity: 0.4;
+            /* final brightness of the glow               */
+            --xfade-ms: 350;
+            /* cross‑fade duration for sampled mode        */
+            --sample-int: 2000;
+            /* ms between snapshots in sampled mode       */
+            --aspect: 16/9;
+            --glow-scale: 1;
+        }
+
+        html,
+        body {
+            margin: 0;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            color: #fff;
+            font: 14px/1.4 system-ui, sans-serif;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            display: flex;
+            gap: 20px;
+            align-items: flex-start;
+        }
+
+        .player-section {
+            flex: 2;
+            min-width: 400px;
+        }
+
+        .controls-section {
+            flex: 1;
+            min-width: 300px;
+            background: #1a1a1a79;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            position: relative;
+            z-index: 9999;
+        }
+
+        #player {
+            width: 100%;
+            max-width: 900px;
+        }
+
+        #ambilight-wrapper {
+            position: relative;
+            width: 100%;
+            aspect-ratio: var(--aspect);
+            pointer-events: none;
+        }
+
+        .ambient-canvas {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        #player-container {
+            position: relative;
+            z-index: 2;
+        }
+
+        video {
+            display: block;
+            width: 100%;
+            height: auto;
+            background: #000;
+            border-radius: 4px;
+        }
+
+        /* Controls Styling */
+        h2 {
+            margin: 0 0 15px 0;
+            color: #fff;
+            font-size: 18px;
+            border-bottom: 2px solid #333;
+            padding-bottom: 8px;
+        }
+
+        .control-group {
+            margin-bottom: 20px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #ccc;
+            font-weight: 500;
+        }
+
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .slider-container input[type="range"] {
+            flex: 1;
+            height: 6px;
+            border-radius: 3px;
+            background: #333;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        .slider-container input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #ff0000;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        .slider-container input[type="range"]::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #ff0000;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        .slider-value {
+            min-width: 60px;
+            text-align: right;
+            color: #fff;
+            font-weight: bold;
+            background: #333;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .radio-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .radio-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .radio-option input[type="radio"] {
+            accent-color: #ff0000;
+        }
+
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #333;
+            transition: .4s;
+            border-radius: 24px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        input:checked+.toggle-slider {
+            background-color: #ff0000;
+        }
+
+        input:checked+.toggle-slider:before {
+            transform: translateX(26px);
+        }
+
+        .checkbox-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .sample-controls {
+            margin-top: 10px;
+            padding: 10px;
+            background: #2a2a2a;
+            border-radius: 4px;
+        }
+
+        .sample-controls input[type="number"] {
+            width: 80px;
+            padding: 6px;
+            background: #333;
+            border: 1px solid #555;
+            border-radius: 4px;
+            color: #fff;
+        }
+
+        .mode-indicator {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+
+        .mode-continuous {
+            background: #28a745;
+            color: white;
+        }
+
+        .mode-sampled {
+            background: #007bff;
+            color: white;
+        }
+
+        .mode-single-color {
+            background: #ffc107;
+            color: black;
+        }
+
+        .ambilight-above {
+            order: -1;
+        }
+
+        .ambilight-middle {
+            position: absolute !important;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 0 !important;
+            pointer-events: none;
+        }
+
+        .ambilight-middle .ambient-canvas {
+            z-index: 0 !important;
+        }
+
+        .ambilight-below {
+            order: 1;
+        }
+
+        #player {
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        #player-container {
+            position: relative;
+            z-index: 2;
+        }
+
+        .status-display {
+            background: #2a2a2a;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 15px;
+            font-size: 12px;
+            color: #ccc;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="player-section">
+            <div id="player">
+                <!-- ✨ Canvases that hold the glow -->
+                <div id="ambilight-wrapper">
+                    <canvas id="canvasBack" class="ambient-canvas"></canvas>
+                    <canvas id="canvasFront" class="ambient-canvas"></canvas>
+                </div>
+                <!-- ▶️ Actual video -->
+                <div id="player-container">
+                    <video id="video" controls crossorigin="anonymous" playsinline
+                        src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"></video>
+                </div>
+            </div>
+        </div>
+
+        <div class="controls-section">
+            <h2>Ambient Light Controls</h2>
+
+            <div class="control-group">
+                <label>Mode <span id="mode-indicator" class="mode-indicator mode-continuous">Continuous</span></label>
+                <div class="radio-group">
+                    <div class="radio-option">
+                        <input type="radio" name="mode" value="continuous" id="mode-continuous" checked>
+                        <label for="mode-continuous">Continuous</label>
+                    </div>
+                    <div class="radio-option">
+                        <input type="radio" name="mode" value="sampled" id="mode-sampled">
+                        <label for="mode-sampled">Sampled</label>
+                    </div>
+                    <div class="radio-option">
+                        <input type="radio" name="mode" value="single-color" id="mode-single-color">
+                        <label for="mode-single-color">Single Color</label>
+                    </div>
+                </div>
+                <div id="sample-controls" class="sample-controls" style="display: none;">
+                    <label for="interval">Sample every</label>
+                    <input id="interval" type="number" value="2000" min="250" step="250"
+                        aria-label="Sample interval in milliseconds">
+                    <span>ms</span>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>Ambilight Position</label>
+                <div class="radio-group">
+                    <div class="radio-option">
+                        <input type="radio" name="position" value="above" id="position-above" checked>
+                        <label for="position-above">Above Video</label>
+                    </div>
+                    <div class="radio-option">
+                        <input type="radio" name="position" value="middle" id="position-middle">
+                        <label for="position-middle">Middle (Overlaid)</label>
+                    </div>
+                    <div class="radio-option">
+                        <input type="radio" name="position" value="below" id="position-below">
+                        <label for="position-below">Below Video</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="control-group" id="single-color-blur-group" style="display: none;">
+                <label>Single Color Blur</label>
+                <div class="checkbox-container">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="single-color-blur-toggle" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span id="single-color-blur-label">Blur Enabled</span>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label for="blur-radius">Blur Radius</label>
+                <div class="slider-container">
+                    <input type="range" id="blur-radius" min="10" max="200" value="100">
+                    <span class="slider-value" id="blur-value">100px</span>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label for="scale-down">Scale Down</label>
+                <div class="slider-container">
+                    <input type="range" id="scale-down" min="0.005" max="0.1" step="0.005" value="0.01">
+                    <span class="slider-value" id="scale-value">0.01</span>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label for="overscan-mult">Overscan Multiplier</label>
+                <div class="slider-container">
+                    <input type="range" id="overscan-mult" min="1" max="20" value="10">
+                    <span class="slider-value" id="overscan-value">10</span>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label for="glow-scale">Glow Scale</label>
+                <div class="slider-container">
+                    <input type="range" id="glow-scale" min="1" max="2" step="0.05" value="1">
+                    <span class="slider-value" id="glow-scale-value">1</span>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label for="element-opacity">Opacity</label>
+                <div class="slider-container">
+                    <input type="range" id="element-opacity" min="0.1" max="1" step="0.1" value="0.4">
+                    <span class="slider-value" id="opacity-value">0.4</span>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label for="xfade-ms">Cross-fade Duration</label>
+                <div class="slider-container">
+                    <input type="range" id="xfade-ms" min="100" max="1000" step="50" value="350">
+                    <span class="slider-value" id="xfade-value">350ms</span>
+                </div>
+            </div>
+
+            <div class="status-display">
+                <div>Status: <span id="status-text">Ready</span></div>
+                <div>FPS: <span id="fps-display">0</span></div>
+                <div>Canvas Size: <span id="canvas-size">-</span></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        (() => {
+            /* ───────────────────────── constants pulled from CSS ─────────────────── */
+            const css = n => +getComputedStyle(document.documentElement).getPropertyValue(n);
+            let BLUR = css('--blur-radius');
+            let SCALE = css('--scale-down');
+            let OVER = css('--overscan-mult');
+            let OPACITY = css('--element-opacity');
+            let XFADE_MS = css('--xfade-ms');
+            let SAMPLE = css('--sample-int');
+            let GLOW_SCALE = css('--glow-scale');
+
+            /* ─────────────────────────── DOM references ───────────────────────────── */
+            const video = document.getElementById('video');
+            let front = document.getElementById('canvasFront');
+            let back = document.getElementById('canvasBack');
+            const wrapper = document.getElementById('ambilight-wrapper');
+            const intInput = document.getElementById('interval');
+
+            /* contexts */
+            const ctxFront = front.getContext('2d');
+            const ctxBack = back.getContext('2d');
+            ctxFront.globalAlpha = 1;
+            ctxBack.globalAlpha = 1;
+
+            /* tiny off‑screen "thumbnail" canvas we blur then upscale → matches YouTube */
+            const thumb = document.createElement('canvas');
+            const tCtx = thumb.getContext('2d');
+
+            /* ───────────────────────── UI Controls ─────────────────────────────── */
+            const controls = {
+                blurRadius: document.getElementById('blur-radius'),
+                scaleDown: document.getElementById('scale-down'),
+                overscanMult: document.getElementById('overscan-mult'),
+                elementOpacity: document.getElementById('element-opacity'),
+                xfadeMs: document.getElementById('xfade-ms'),
+                singleColorBlurToggle: document.getElementById('single-color-blur-toggle'),
+                singleColorBlurLabel: document.getElementById('single-color-blur-label'),
+                singleColorBlurGroup: document.getElementById('single-color-blur-group'),
+                modeIndicator: document.getElementById('mode-indicator'),
+                sampleControls: document.getElementById('sample-controls'),
+                statusText: document.getElementById('status-text'),
+                fpsDisplay: document.getElementById('fps-display'),
+                canvasSize: document.getElementById('canvas-size'),
+                glowScale: document.getElementById('glow-scale')
+            };
+
+            // Global variables for modes
+            let singleColorBlurEnabled = true;
+
+            /* ───────────────────────── Setup UI Event Listeners ─────────────────── */
+            function setupControls() {
+                // Slider updates
+                controls.blurRadius.addEventListener('input', (e) => {
+                    BLUR = +e.target.value;
+                    document.getElementById('blur-value').textContent = BLUR + 'px';
+                    resize();
+                });
+
+                controls.scaleDown.addEventListener('input', (e) => {
+                    SCALE = +e.target.value;
+                    document.getElementById('scale-value').textContent = SCALE;
+                    resize();
+                });
+
+                controls.overscanMult.addEventListener('input', (e) => {
+                    OVER = +e.target.value;
+                    document.getElementById('overscan-value').textContent = OVER;
+                    resize();
+                });
+
+                controls.elementOpacity.addEventListener('input', (e) => {
+                    OPACITY = +e.target.value;
+                    document.getElementById('opacity-value').textContent = OPACITY;
+                });
+
+                controls.xfadeMs.addEventListener('input', (e) => {
+                    XFADE_MS = +e.target.value;
+                    document.getElementById('xfade-value').textContent = XFADE_MS + 'ms';
+                });
+
+                controls.glowScale.addEventListener('input', (e) => {
+                    GLOW_SCALE = +e.target.value;
+                    document.getElementById('glow-scale-value').textContent = GLOW_SCALE;
+                    resize();
+                });
+
+                // Position radio buttons
+                document.querySelectorAll('input[name="position"]').forEach(radio => {
+                    radio.addEventListener('change', (e) => {
+                        const position = e.target.value;
+                        wrapper.className = `ambilight-${position}`;
+                    });
+                });
+
+                // Single color blur toggle
+                controls.singleColorBlurToggle.addEventListener('change', (e) => {
+                    singleColorBlurEnabled = e.target.checked;
+                    controls.singleColorBlurLabel.textContent = singleColorBlurEnabled ? 'Blur Enabled' : 'Blur Disabled';
+                });
+
+                // Mode changes
+                document.querySelectorAll('input[name="mode"]').forEach(radio => {
+                    radio.addEventListener('change', handleModeChange);
+                });
+
+                intInput.addEventListener('input', () => { SAMPLE = +intInput.value; });
+            }
+
+            function handleModeChange() {
+                const mode = document.querySelector('input[name="mode"]:checked').value;
+                controls.sampleControls.style.display = mode === 'sampled' ? 'block' : 'none';
+                controls.singleColorBlurGroup.style.display = mode === 'single-color' ? 'block' : 'none';
+
+                // Update mode indicator
+                controls.modeIndicator.className = `mode-indicator mode-${mode}`;
+                controls.modeIndicator.textContent = mode.charAt(0).toUpperCase() + mode.slice(1).replace('-', ' ');
+
+                restart();
+            }
+
+            /* ───────────────────────── resize helpers ─────────────────────────────── */
+            function resize() {
+                if (!video.videoWidth) return;
+                const W = video.videoWidth, H = video.videoHeight;
+
+                // overscanned output size
+                const pad = BLUR * OVER;
+                const outW = W + pad * 2, outH = H + pad * 2;
+                [front, back].forEach(c => { c.width = outW; c.height = outH; });
+
+                // thumbnail size we copy from (down‑scaled source)
+                thumb.width = Math.max(16, (W * SCALE) | 0);
+                thumb.height = Math.max(16, (H * SCALE) | 0);
+
+                // scale wrapper so glow hugs the video
+                wrapper.style.transform = `scale(${(outW / W) * GLOW_SCALE}, ${(outH / H) * GLOW_SCALE})`;
+
+                // Update status
+                controls.canvasSize.textContent = `${outW}×${outH}`;
+            }
+
+            video.addEventListener('loadedmetadata', resize);
+            window.addEventListener('resize', resize);
+
+            /* ──────────────────────── drawing primitives ─────────────────────────── */
+            const DARK = '#0f0f0f';
+
+            function paintGlow(targetCtx) {
+                // 1. grab miniature video frame
+                tCtx.drawImage(video, 0, 0, thumb.width, thumb.height);
+
+                // 2. clear target & fill base colour
+                targetCtx.clearRect(0, 0, targetCtx.canvas.width, targetCtx.canvas.height);
+                targetCtx.fillStyle = DARK;
+                targetCtx.fillRect(0, 0, targetCtx.canvas.width, targetCtx.canvas.height);
+
+                // 3. blur‑then‑draw expanded thumbnail into position
+                targetCtx.filter = `blur(${BLUR}px)`;
+                const pad = BLUR * OVER;
+                targetCtx.drawImage(
+                    thumb,
+                    0, 0, thumb.width, thumb.height,
+                    pad, pad, video.videoWidth, video.videoHeight
+                );
+                targetCtx.filter = 'none';
+            }
+
+            function paintSingleColor(targetCtx) {
+                // 1. grab miniature video frame for color sampling
+                tCtx.drawImage(video, 0, 0, 16, 16);
+                const imageData = tCtx.getImageData(0, 0, 16, 16);
+                const data = imageData.data;
+
+                // 2. calculate average color
+                let r = 0, g = 0, b = 0;
+                for (let i = 0; i < data.length; i += 4) {
+                    r += data[i];
+                    g += data[i + 1];
+                    b += data[i + 2];
+                }
+                const pixelCount = data.length / 4;
+                r = Math.round(r / pixelCount);
+                g = Math.round(g / pixelCount);
+                b = Math.round(b / pixelCount);
+
+                // 3. clear target & fill base colour
+                targetCtx.clearRect(0, 0, targetCtx.canvas.width, targetCtx.canvas.height);
+                targetCtx.fillStyle = DARK;
+                targetCtx.fillRect(0, 0, targetCtx.canvas.width, targetCtx.canvas.height);
+
+                // 4. apply color with optional blur
+                if (singleColorBlurEnabled) {
+                    // Create a small colored rectangle and blur it
+                    targetCtx.filter = `blur(${BLUR}px)`;
+                    targetCtx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+                    const pad = BLUR * OVER;
+                    targetCtx.fillRect(pad, pad, video.videoWidth, video.videoHeight);
+                    targetCtx.filter = 'none';
+                } else {
+                    // Fill entire canvas with solid color
+                    targetCtx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+                    targetCtx.fillRect(0, 0, targetCtx.canvas.width, targetCtx.canvas.height);
+                }
+            }
+
+            /* ─────────────────────── runtime mode controller ────────────────── */
+            let mode = 'continuous', raf, timer, last = 0;
+            const MAX_FPS = 30;
+            const FRAME_MS = 1000 / MAX_FPS;
+            let frameCount = 0;
+            let lastFpsUpdate = 0;
+
+            function restart() {
+                cancelAnimationFrame(raf);
+                clearInterval(timer);
+                resize();
+                if (video.paused || video.ended) {
+                    controls.statusText.textContent = 'Paused';
+                    return;
+                }
+
+                mode = document.querySelector('input[name="mode"]:checked').value;
+                controls.statusText.textContent = `Running (${mode})`;
+
+                if (mode === 'continuous') {
+                    loop(performance.now());
+                } else if (mode === 'sampled') {
+                    scheduleSample();
+                } else if (mode === 'single-color') {
+                    loopSingleColor(performance.now());
+                }
+            }
+
+            function loop(now) {
+                raf = requestAnimationFrame(loop);
+                if (now - last < FRAME_MS || video.paused) return;
+                last = now;
+
+                paintGlow(ctxFront);
+                front.style.opacity = OPACITY;
+
+                updateFPS(now);
+            }
+
+            function loopSingleColor(now) {
+                raf = requestAnimationFrame(loopSingleColor);
+                if (now - last < FRAME_MS || video.paused) return;
+                last = now;
+
+                paintSingleColor(ctxFront);
+                front.style.opacity = OPACITY;
+
+                updateFPS(now);
+            }
+
+            function updateFPS(now) {
+                frameCount++;
+                if (now - lastFpsUpdate >= 1000) {
+                    controls.fpsDisplay.textContent = Math.round(frameCount * 1000 / (now - lastFpsUpdate));
+                    frameCount = 0;
+                    lastFpsUpdate = now;
+                }
+            }
+
+            function scheduleSample() {
+                sampleOnce();
+                timer = setInterval(sampleOnce, SAMPLE);
+            }
+
+            function sampleOnce() {
+                if (video.paused) return;
+
+                // YouTube's OVJ algorithm - proper two-canvas cross-fade:
+
+                // 1. Stop any existing animations
+                const existingAnimations = [...front.getAnimations(), ...back.getAnimations()];
+                existingAnimations.forEach(anim => {
+                    anim.pause();
+                    anim.finish();
+                });
+
+                // 2. Copy current front canvas content to back canvas (preserve visible frame)
+                ctxBack.clearRect(0, 0, back.width, back.height);
+                ctxBack.drawImage(front, 0, 0, back.width, back.height);
+
+                // 3. Set back canvas to current opacity (showing old content)
+                back.style.opacity = OPACITY;
+
+                // 4. Draw NEW content on front canvas
+                const currentMode = document.querySelector('input[name="mode"]:checked').value;
+                if (currentMode === 'single-color') {
+                    paintSingleColor(ctxFront);
+                } else {
+                    paintGlow(ctxFront);
+                }
+
+                // 5. Start front canvas invisible
+                front.style.opacity = "0";
+
+                // 6. Simultaneous cross-fade: back fades OUT while front fades IN
+                // This maintains constant total brightness
+                const fadeInAnimation = front.animate([{ opacity: 0 }, { opacity: OPACITY }], {
+                    duration: XFADE_MS,
+                    easing: `steps(${Math.max(1, Math.round(XFADE_MS / 1000 * MAX_FPS))})`,
+                    fill: 'forwards'
+                });
+
+                const fadeOutAnimation = back.animate([{ opacity: OPACITY }, { opacity: 0 }], {
+                    duration: XFADE_MS,
+                    easing: `steps(${Math.max(1, Math.round(XFADE_MS / 1000 * MAX_FPS))})`,
+                    fill: 'forwards'
+                });
+            }
+
+            video.addEventListener('play', restart);
+            video.addEventListener('pause', () => {
+                cancelAnimationFrame(raf);
+                clearInterval(timer);
+                controls.statusText.textContent = 'Paused';
+                controls.fpsDisplay.textContent = '0';
+            });
+
+            // Initialize controls
+            setupControls();
+
+            // Initialize position
+            wrapper.className = 'ambilight-above';
+
+            controls.statusText.textContent = 'Ready';
+        })();
+    </script>
+</body>
+
+</html>
